@@ -39,10 +39,10 @@ float ounces;
 #define PLATF_SERVO_CLOSED 170
 #define PLATF_SERVO_OPENED 70
 
-#define SLIDE_SERV_PLASTIC_ANGLE 170
-#define SLIDE_SERV_METALL_ANGLE 70
-#define SLIDE_SERV_GLASS_ANGLE 0
-#define SLIDE_SERV_PLASTIC_CUP_ANGLE 170
+#define SLIDE_SERV_PLASTIC_ANGLE 175
+#define SLIDE_SERV_METALL_ANGLE 5
+#define SLIDE_SERV_GLASS_ANGLE 60
+#define SLIDE_SERV_PLASTIC_CUP_ANGLE 135
 
 Servo platform_servo;
 Servo slide_servo;
@@ -50,8 +50,8 @@ Servo slide_servo;
 
 #define CLEAR_CODESIZE 4
 #define CLEAR_CODE {0x32,0xA9,0x2E,0x1E,0,0,0}
-#define MASTER_CODESIZE 7
-#define MASTER_CODE {0x4,0x79,0x54,0xC2,0xE5,0x5A,0x80}
+#define MASTER_CODESIZE 4
+#define MASTER_CODE {0x89,0x78,0x9B,0x6E,0,0,0}
 
 #define MAX_USERS_AMOUNT 20
 #define SETTINGS_EEPROM_ADDRESS 0
@@ -71,7 +71,7 @@ int IR_SENSOR2_CALIBRATION_VALUE = 0;
 
 
 enum materialType {none, glass, metal, 
-					plastic, plasticCup};
+					plastic, plasticCup, unknown, error};
 
 struct settings {
   uint8_t users_amount;
@@ -153,7 +153,7 @@ void print_UserInfo(user_node User, int address)
           Serial.print(User.uid[i], HEX);
           Serial.print("  ");
           lcd.print(User.uid[i], HEX);/////////////////////////////////////////////
-          lcd.setCursor(i*2,0);//////////////////////////////////////////////////////
+          lcd.setCursor((i+1)*2,0);//////////////////////////////////////////////////////
         }
         Serial.println("");
 
@@ -357,8 +357,9 @@ void setup()
   
   platform_servo.attach(PLATFORM_SERVO_PIN);
   slide_servo.attach(SLIDE_SERVO_PIN);
-
   slide_servo.write(SLIDE_SERV_PLASTIC_ANGLE);
+  slide_servo.detach();
+  
   platform_servo.write(PLATF_SERVO_CLOSED);
   delay(300);
   
@@ -370,9 +371,9 @@ void setup()
   
   restoreSettingsFromEEPROM();
   /////  Use these to restore Arduino AppServiceData
-  //restoreDefaultSettings();
-  //setClearUser();
-  //setMasterUser();
+  restoreDefaultSettings();
+  setClearUser();
+  setMasterUser();
   
   //LowPower.idle(SLEEP_FOREVER, ADC_OFF, TIMER2_OFF, TIMER1_OFF, TIMER0_OFF,
   //              SPI_OFF, USART0_ON, TWI_OFF);
@@ -468,7 +469,12 @@ materialType check_materialType()
   int val1 = get_analogReadValue(IR_SENSOR1_PIN, 10) - IR_SENSOR1_CALIBRATION_VALUE;
   int val2 = get_analogReadValue(IR_SENSOR2_PIN, 10) - IR_SENSOR2_CALIBRATION_VALUE;
 
-  //// Debug Print
+  float weight = get_weightInGrams( NUM_OF_MESUREMENTS);
+  
+  //// Debug print
+  Serial.print(">>> Weight is ");
+  Serial.println(weight);
+
   Serial.print("\n>>> ");
   Serial.print(val1);
   Serial.print('\t');
@@ -476,58 +482,31 @@ materialType check_materialType()
   Serial.print('\n');
   ////
 
-  if (abs(val1) <= IR_1_POROG && abs(val2) <= IR_2_POROG)
+  if (abs(val1) <= IR_1_POROG && abs(val2) <= IR_2_POROG && weight < 30)
   {
       material = none;
   }
   else
   {
-      float weight = get_weightInGrams( NUM_OF_MESUREMENTS);
-      //// Debug print
-      Serial.print(">>> Weight is ");
-      Serial.println(weight);
       ////
-      if (weight <= 25)
+      if (weight < -25)
+        material = error;
+      else if (weight <= 30)
         material = plasticCup;
-      else if (weight >= 25 and weight <= 90)
+      else if (weight >= 30 and weight <= 90)
         material = metal;
       else if (weight >= 90 and weight <= 400)
         material = plastic;
       else if (weight >= 700)
         material = glass;
+      else
+        material = unknown;
   }
   //float size = get_sizeInMM(10);
   //scan_VolumeSurface();
 
   return material;
 } 
-
-/*
-materialType check_materialType() //////////////////////////////////////////////////////
-{
-  static int numCall;
-  materialType mat;
-  switch (numCall)
-  {
-    case 0:
-      mat = none;
-      break;
-    case 1:
-      mat = glass;
-      break;
-    case 2:
-      mat = metal;
-      break;
-    case 3:
-      mat = plastic;
-      break;
-    case 4:
-      mat = plasticCup;
-  } 
-  numCall = (numCall+1) % 5;
-  return mat;
-}
-*/
 
 
 
@@ -549,6 +528,12 @@ materialType check_materialType() //////////////////////////////////////////////
         break;  
 	  case plasticCup:
         sprintf(str, "plastic cup");
+        break;  
+    case unknown:
+        sprintf(str, "unknown");
+        break;  
+	  case error:
+        sprintf(str, "error");
         break;  
   }
   Serial.print(str);
@@ -592,6 +577,23 @@ int exec_fandomat(int address)
         lcd.print("There is nothing!");
         return 0;
     }
+    case error:
+    {
+      Serial.println("There is some problem with scale calibration!");
+      Serial.println("I'll thow it to metal box");
+      //Total.error_pcs++;
+      angle = SLIDE_SERV_METALL_ANGLE;
+      delay(1000);
+      break;
+    }
+    case unknown:
+    {
+      Serial.println("There is unknown waste.. I'll thow it to metal box");
+      //Total.unknown_pcs++;
+      angle = SLIDE_SERV_METALL_ANGLE;
+      delay(1000);
+      break;
+    }
     case glass:
       {
         User.glass_pcs++;
@@ -627,18 +629,22 @@ int exec_fandomat(int address)
   }
   
   //lcd.print(message);
-  delay(1500);
+  delay(1000);
   print_UserInfo(User, address);
-  delay(1500);
+  delay(1000);
   print_UserInfo(Total, sett.TotalAddress);
 
   // sort the trash!
-  slide_servo.write(angle);
+  slide_servo.attach(SLIDE_SERVO_PIN);
   delay(200);
+  slide_servo.write(angle);
+  delay(300);
+  slide_servo.detach();
+  //delay(200);
   platform_servo.write(PLATF_SERVO_OPENED);
-  delay(500);
+  delay(700);
   platform_servo.write(PLATF_SERVO_CLOSED);
-  delay(500);
+  delay(300);
 
   //  CALiBRATION
   scale.tare();     //calibrate scale after servo mooving
@@ -676,10 +682,10 @@ void loop()
     //Display User UID or Name (Guest/Master/Clean)
     Serial.println(">>> Starting fandomat..");
     exec_fandomat(address);
-    delay(DELAY_TIME);  //additional delay after exec
+    //delay(DELAY_TIME*0.8);  //additional delay after exec
   }
   else if (address >= -2)
-    delay(DELAY_TIME); //additional delay after serviceCard
+    delay(DELAY_TIME*0.5); //additional delay after serviceCard
 
   delay(DELAY_TIME);
   //LowPower.powerDown(SLEEP_250MS, ADC_OFF, BOD_OFF);  
